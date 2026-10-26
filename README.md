@@ -86,6 +86,7 @@ Crea y configura los siguientes Security Groups:
   - `SSH` (TCP 22): Origen `sg-k3s-public` (salto SSH seguro desde el Master).
   - `All Traffic` / Overlay K3s: Origen `10.0.0.0/16` (Flannel vxlan 8472, Kubelet 10250).
 - **Outbound (Salida):** Todo el tráfico a `0.0.0.0/0` (vía NAT Gateway).
+<img width="1616" height="770" alt="Captura de pantalla 2026-10-26 170300" src="https://github.com/user-attachments/assets/1a4d2fcc-8f37-48cd-b0a7-d94948a65276" />
 
 ### 3.4. `mongodb-ec2` (Instancia MongoDB Dedicada)
 - **Inbound (Entrada):**
