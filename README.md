@@ -83,23 +83,30 @@ Crea y configura los siguientes Security Groups:
 
 <img width="1020" height="773" alt="image" src="https://github.com/user-attachments/assets/dd5c5ff9-ea2d-44e1-8724-cbfcc36bca51" />
 
-### 3.3. `k3s-private` (Workers Backend Java y Backend BA)
+### 3.3. `k3s-private` ( GS Workers Backend Java y Backend BA en VPC)
 - **Inbound (Entrada):**
   - `SSH` (TCP 22): Origen `sg-k3s-public` (salto SSH seguro desde el Master).
   - `All Traffic` / Overlay K3s: Origen `10.0.0.0/16` (Flannel vxlan 8472, Kubelet 10250).
 - **Outbound (Salida):** Todo el tráfico a `0.0.0.0/0` (vía NAT Gateway).
 
-### 3.4. `mongodb-ec2` (Instancia MongoDB Dedicada)
+<img width="1366" height="696" alt="image" src="https://github.com/user-attachments/assets/59cf363d-80a4-4ac4-b6ea-cf1038808ccd" />
+
+
+### 3.4. `mongodb-ec2` (GS MongoDB Dedicada en VPC)
 - **Inbound (Entrada):**
   - `Custom TCP` (TCP 27017): Origen `sg-k3s-private` (o `10.0.10.0/24`). **Bloqueado para Internet.**
   - `SSH` (TCP 22): Origen `sg-k3s-public` (para ingresar por SSH desde el Master).
 - **Outbound (Salida):** Todo el tráfico a `0.0.0.0/0` (vía NAT Gateway para descargar paquetes).
 
-### 3.5. `rds-sqlserver` (RDS SQL Server)
+  <img width="1002" height="575" alt="image" src="https://github.com/user-attachments/assets/5db8f821-99e7-440c-a467-37deada6b5fb" />
+
+
+### 3.5. `rds-sqlserver` ( GS RDS SQL Server en VPC)
 - **Inbound (Entrada):**
   - `MSSQL` (TCP 1433): Origen `sg-k3s-private`.
   `MSSQL` (TCP 1433): Origen MI IP o 0.0.0 (0.0.0.0. se debe utilizar solo para insertar el script incialmente luego cambiar a MI IP o eliminar la regla)
-  
+
+<img width="1862" height="762" alt="image" src="https://github.com/user-attachments/assets/6c3646e7-286d-4ed8-8db4-464fd35f6fb6" />
 
 ---
 
@@ -320,11 +327,8 @@ GO
 echo "=== DESPLIEGUE FINALIZADO ==="   
 2. luego crear instancia. 
 
-### Script de Despliegue de MongoDB (User Data)
-
-Al lanzar la instancia en AWS, pega el siguiente script en la sección **User data** (Detalles avanzados). Este script instalará MongoDB, configurará la seguridad y poblará la base de datos de Bodega Peirano automáticamente.
-USAR EL SCRIPT DEL ARCHIVO INITI-MONGOSHDB.SH (ESTE SCRIPT ES REFERENCIAL)
-```bash
+#### Script 
+```
 #!/bin/bash
 # 0. Redirigir toda la salida a un log para poder depurar (en /var/log/user-data.log)
 exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
@@ -337,15 +341,13 @@ while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock 
 
 # 2. Instalar dependencias y llave de MongoDB 7.0
 apt-get update
-apt-get install -y gnupg curl lsb-release
+apt-get install -y gnupg curl
 
-curl -fsSL [https://www.mongodb.org/static/pgp/server-7.0.asc](https://www.mongodb.org/static/pgp/server-7.0.asc) | \
+curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | \
    gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg \
    --dearmor --yes
 
-# Se detecta automáticamente la versión de Ubuntu (jammy, noble o resolute)
-UBUNTU_CODENAME=$(lsb_release -cs)
-echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] [https://repo.mongodb.org/apt/ubuntu](https://repo.mongodb.org/apt/ubuntu) $UBUNTU_CODENAME/mongodb-org/7.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list
 
 apt-get update
 apt-get install -y mongodb-org
@@ -357,8 +359,30 @@ systemctl start mongod
 sleep 15
 
 # 4. Crear usuario administrador
-mongosh <<EOF "Mongo12345!", "admin" "admin", "root", # 's/bindIp: -i /etc/mongod.conf 0.0.0.0 0.0.0.0/' 127.0.0.1/bindIp: 5. Configurar EOF [ ] a activar admin autenticación bindIp cat db.createUser({ db: pwd: role: roles: sed use user: y { } })>> /etc/mongod.conf <<EOF # 'EOF_JS' 15 6. 7. << Crear EOF JS MongoDB Reiniciar aplicar authorization: bodega cat datos de el enabled inicialización la mongod para restart script security: seguridad sleep systemctl> /tmp/init-bodega.js
-db = db.getSiblingDB('BodegaPeiranoDB');
+mongosh <<EOF
+use admin
+db.createUser({
+  user: "admin",
+  pwd: "Mongo12345!",
+  roles: [ { role: "root", db: "admin" } ]
+})
+EOF
+
+# 5. Configurar bindIp a 0.0.0.0 y activar autenticación
+sed -i 's/bindIp: 127.0.0.1/bindIp: 0.0.0.0/' /etc/mongod.conf
+
+cat >> /etc/mongod.conf <<EOF
+security:
+  authorization: enabled
+EOF
+
+# 6. Reiniciar MongoDB para aplicar la seguridad
+systemctl restart mongod
+sleep 15
+
+# 7. Crear el script JS de inicialización de datos de la bodega
+cat << 'EOF_JS' > /tmp/init-bodega.js
+const db = db.getSiblingDB('BodegaPeiranoDB');
 
 db.ubigeo.deleteMany({});
 db.categoria.deleteMany({});
@@ -397,26 +421,26 @@ db.categoria.insertMany([
 
 db.producto.insertMany([
     { _id: 1, nombre: "PISCO PEIRANO PURO QUEBRANTA botella 750 ml.", descripcion: "Pisco puro quebranta artesanal", codigo_barras_sku: "7750123456789", unidad_medida: "750ml", precio_unitario: 30.00, id_categoria: 1, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
-    { _id: 2, nombre: "PISCO PEIRANO PURO ITALIA botella 750 ml.",    descripcion: "Pisco puro italia premium",        codigo_barras_sku: "7750987654321", unidad_medida: "750ml", precio_unitario: 30.00, id_categoria: 1, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
-    { _id: 3, nombre: "PISCO PEIRANO ACHOLADO botella 750 ml.",       descripcion: "Pisco acholado especial",          codigo_barras_sku: "7750223344556", unidad_medida: "750ml", precio_unitario: 30.00, id_categoria: 1, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
+    { _id: 2, nombre: "PISCO PEIRANO PURO ITALIA botella 750 ml.",    descripcion: "Pisco puro italia premium",       codigo_barras_sku: "7750987654321", unidad_medida: "750ml", precio_unitario: 30.00, id_categoria: 1, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
+    { _id: 3, nombre: "PISCO PEIRANO ACHOLADO botella 750 ml.",       descripcion: "Pisco acholado especial",         codigo_barras_sku: "7750223344556", unidad_medida: "750ml", precio_unitario: 30.00, id_categoria: 1, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
     { _id: 4, nombre: "PISCO PEIRANO PURO QUEBRANTA galon 4 Lt.",     descripcion: "Pisco quebranta galón",            codigo_barras_sku: "SKU-PIS-QUE-GAL", unidad_medida: "Galon 4L", precio_unitario: 120.00, id_categoria: 1, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
-    { _id: 5, nombre: "PISCO PEIRANO PURO ITALIA galon 4 Lt.",        descripcion: "Pisco italia galón",               codigo_barras_sku: "SKU-PIS-ITA-GAL", unidad_medida: "Galon 4L", precio_unitario: 120.00, id_categoria: 1, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
+    { _id: 5, nombre: "PISCO PEIRANO PURO ITALIA galon 4 Lt.",        descripcion: "Pisco italia galón",              codigo_barras_sku: "SKU-PIS-ITA-GAL", unidad_medida: "Galon 4L", precio_unitario: 120.00, id_categoria: 1, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
     { _id: 6, nombre: "PISCO PEIRANO ACHOLADO galon 4 Lt.",           descripcion: "Pisco acholado galón",             codigo_barras_sku: "SKU-PIS-ACH-GAL", unidad_medida: "Galon 4L", precio_unitario: 100.00, id_categoria: 1, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
-    { _id: 7, nombre: "Vino EUMA Tinto (Seco) botella 750 ml.",       descripcion: "Vino tinto seco",                  codigo_barras_sku: "SKU-VIN-EUM-TIN", unidad_medida: "750ml", precio_unitario: 22.00, id_categoria: 2, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
-    { _id: 8, nombre: "Vino EUMA Tinto (Semi Seco) botella 750 ml.",  descripcion: "Vino tinto semiseco",              codigo_barras_sku: "SKU-VIN-EUM-SEM", unidad_medida: "750ml", precio_unitario: 22.00, id_categoria: 2, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
-    { _id: 9, nombre: "Vino EUMA Blanco (Dulce) botella 750 ml.",     descripcion: "Vino blanco dulce",                codigo_barras_sku: "SKU-VIN-EUM-BLA", unidad_medida: "750ml", precio_unitario: 22.00, id_categoria: 2, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
+    { _id: 7, nombre: "Vino EUMA Tinto (Seco) botella 750 ml.",       descripcion: "Vino tinto seco",                 codigo_barras_sku: "SKU-VIN-EUM-TIN", unidad_medida: "750ml", precio_unitario: 22.00, id_categoria: 2, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
+    { _id: 8, nombre: "Vino EUMA Tinto (Semi Seco) botella 750 ml.",  descripcion: "Vino tinto semiseco",             codigo_barras_sku: "SKU-VIN-EUM-SEM", unidad_medida: "750ml", precio_unitario: 22.00, id_categoria: 2, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
+    { _id: 9, nombre: "Vino EUMA Blanco (Dulce) botella 750 ml.",     descripcion: "Vino blanco dulce",               codigo_barras_sku: "SKU-VIN-EUM-BLA", unidad_medida: "750ml", precio_unitario: 22.00, id_categoria: 2, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
     { _id: 10, nombre: "SANGRIA TINTA SANGRIA 1L.",   descripcion: "Sangría tinta lista para servir",  codigo_barras_sku: "SKU-SAN-TIN-1L", unidad_medida: "1L", precio_unitario: 12.00, id_categoria: 3, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
     { _id: 11, nombre: "SANGRIA BLANCA BLANGRIA 1L.", descripcion: "Sangría blanca lista para servir", codigo_barras_sku: "SKU-SAN-BLA-1L", unidad_medida: "1L", precio_unitario: 12.00, id_categoria: 3, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
-    { _id: 12, nombre: "Jarabe de Goma JAPI botella 750 ml.",       descripcion: "Jarabe de goma para coctelería",       codigo_barras_sku: "SKU-JAR-GOM-750", unidad_medida: "750ml", precio_unitario: 7.00, id_categoria: 4, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
+    { _id: 12, nombre: "Jarabe de Goma JAPI botella 750 ml.",      descripcion: "Jarabe de goma para coctelería",      codigo_barras_sku: "SKU-JAR-GOM-750", unidad_medida: "750ml", precio_unitario: 7.00, id_categoria: 4, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null },
     { _id: 13, nombre: "Jarabe de Granadina JAPI botella 750 ml.", descripcion: "Jarabe de granadina para coctelería", codigo_barras_sku: "SKU-JAR-GRA-750", unidad_medida: "750ml", precio_unitario: 8.00, id_categoria: 4, estado: true, fecha_creacion: ahora, fecha_actualizacion: null, fecha_eliminacion: null, fecha_restauracion: null }
 ]);
 
 db.cliente.insertMany([
-    { _id: 1, tipo_documento: 'DNI', numero_documento: '72145678',  nombre: 'Sebastian',          apellido: 'Alvarez', correo: 'sebastian@mail.com',  telefono: '987654321', fecha_nacimiento: '1990-05-15', ubigeo_id: '150101', estado: true, fecha_creacion: ahora },
-    { _id: 2, tipo_documento: 'DNI', numero_documento: '45678912',  nombre: 'Angel',              apellido: 'Perez',   correo: 'angel.p@mail.com',    telefono: '999888777', fecha_nacimiento: '1985-08-20', ubigeo_id: '150102', estado: true, fecha_creacion: ahora },
-    { _id: 3, tipo_documento: 'CE',  numero_documento: '00123456',  nombre: 'Valeriano',          apellido: 'Gomez',   correo: 'valeriano@mail.com',  telefono: '912345678', fecha_nacimiento: '1982-12-10', ubigeo_id: '150103', estado: true, fecha_creacion: ahora },
-    { _id: 4, tipo_documento: 'DNI', numero_documento: '12345678',  nombre: 'Maria',              apellido: 'Sosa',    correo: 'maria.sosa@mail.com', telefono: '955444333', fecha_nacimiento: '1995-03-25', ubigeo_id: '150101', estado: true, fecha_creacion: ahora },
-    { _id: 5, tipo_documento: 'RUC', numero_documento: '20123456789', nombre: 'Distribuidora Asia', apellido: 'SAC',   correo: 'ventas@asiacorp.pe',  telefono: '944333222', fecha_nacimiento: '1990-01-01', ubigeo_id: '150102', estado: true, fecha_creacion: ahora }
+    { _id: 1, tipo_documento: 'DNI', numero_documento: '72145678',  nombre: 'Sebastian',          apellido: 'Alvarez', correo: 'sebastian@mail.com',   telefono: '987654321', fecha_nacimiento: '1990-05-15', ubigeo_id: '150101', estado: true, fecha_creacion: ahora },
+    { _id: 2, tipo_documento: 'DNI', numero_documento: '45678912',  nombre: 'Angel',              apellido: 'Perez',   correo: 'angel.p@mail.com',     telefono: '999888777', fecha_nacimiento: '1985-08-20', ubigeo_id: '150102', estado: true, fecha_creacion: ahora },
+    { _id: 3, tipo_documento: 'CE',  numero_documento: '00123456',  nombre: 'Valeriano',          apellido: 'Gomez',   correo: 'valeriano@mail.com',   telefono: '912345678', fecha_nacimiento: '1982-12-10', ubigeo_id: '150103', estado: true, fecha_creacion: ahora },
+    { _id: 4, tipo_documento: 'DNI', numero_documento: '12345678',  nombre: 'Maria',              apellido: 'Sosa',    correo: 'maria.sosa@mail.com',  telefono: '955444333', fecha_nacimiento: '1995-03-25', ubigeo_id: '150101', estado: true, fecha_creacion: ahora },
+    { _id: 5, tipo_documento: 'RUC', numero_documento: '20123456789', nombre: 'Distribuidora Asia', apellido: 'SAC',   correo: 'ventas@asiacorp.pe',   telefono: '944333222', fecha_nacimiento: '1990-01-01', ubigeo_id: '150102', estado: true, fecha_creacion: ahora }
 ]);
 
 db.almacen.insertMany([
@@ -427,11 +451,11 @@ db.almacen.insertMany([
 ]);
 
 db.metodo_pago.insertMany([
-    { _id: 1, nombre: 'Efectivo',          es_electronico: false, estado: true },
-    { _id: 2, nombre: 'Yape',              es_electronico: true,  estado: true },
-    { _id: 3, nombre: 'Plin',              es_electronico: true,  estado: true },
-    { _id: 4, nombre: 'Tarjeta Visa',      es_electronico: true,  estado: true },
-    { _id: 5, nombre: 'Transferencia BCP', es_electronico: true,  estado: true }
+    { _id: 1, nombre: 'Efectivo',           es_electronico: false, estado: true },
+    { _id: 2, nombre: 'Yape',               es_electronico: true,  estado: true },
+    { _id: 3, nombre: 'Plin',               es_electronico: true,  estado: true },
+    { _id: 4, nombre: 'Tarjeta Visa',       es_electronico: true,  estado: true },
+    { _id: 5, nombre: 'Transferencia BCP',  es_electronico: true,  estado: true }
 ]);
 
 print("✅ MongoDB: Datos maestros insertados correctamente.");
@@ -443,6 +467,8 @@ mongosh -u "admin" -p "Mongo12345!" --authenticationDatabase "admin" /tmp/init-b
 # 9. Limpiar el script temporal por seguridad
 rm /tmp/init-bodega.js
 echo "=== DESPLIEGUE FINALIZADO ==="
+
+
 ```
 
 
@@ -470,8 +496,6 @@ sudo cat /var/lib/rancher/k3s/server/node-token
 ---
 
 ### 6.2. En el Worker Frontend (Público)
-| **EC2-Worker-Frontend** | `subnet-public-1a` | **Sí** | `t3.medium` | 20 GB | `sg-k3s-public` | K3s Agent (Frontend) |
-
 Conéctate al Worker Frontend por SSH directo:
 ```powershell
 ssh -i "C:\Users\user\Downloads\tu-llave.pem" ubuntu@<IP_PUBLICA_FRONTEND>
@@ -493,7 +517,6 @@ curl -sfL https://get.k3s.io | K3S_URL=https://10.0.11.178:6443 K3S_TOKEN=K10532
 ### 6.3. En los Workers Privados (Backend Java y Backend BA)
 Conéctate por SSH saltando desde el Master a cada IP privada:
 
-| **EC2-Worker-Backend-Java** | `subnet-private-1a` | **No** | `t3.medium` | 20 GB | `sg-k3s-private` | K3s Agent (Spring Boot) |
 ```powershell
 # Conectar a BACKEND JAVA:
 ssh -i "tu-llave.pem" -J ubuntu@<IP_PUBLICA_MASTER> ubuntu@<IP_PRIVADA_BACKEND_JAVA>
@@ -508,8 +531,6 @@ curl -sfL https://get.k3s.io | K3S_URL=https://<IP_PRIVADA_MASTER>:6443 K3S_TOKE
 #!/bin/bash
 curl -sfL https://get.k3s.io | K3S_URL=https://10.0.15.5:6443 K3S_TOKEN=K107ffd5d5086ca6d0c7507b4fca91b102096381933023d7d556544c132d239b952::server:0ae2ff09dfb48073c8a11331ce36a788 sh -s - --node-name worker-backend-java
 ```
-
-| **EC2-Worker-Backend-BA** | `subnet-private-1a` | **No** | `t3.medium` | 20 GB | `sg-k3s-private` | K3s Agent (FastAPI) |
 
 ```powershell
 # Conectar BACKEND BA:
@@ -548,7 +569,7 @@ kubectl get nodes -L node-role
 
 ### 7.1. Actualizar la IP de MongoDB en `02-configmap.yaml`
 En el archivo `02-configmap.yaml`, reemplaza `IP_PRIVADA_EC2_MONGODB` por la IP privada real de tu EC2 de MongoDB (ej. `10.0.10.50`):
-, Tambien configurar los secrtes con el endpoitn de rds  y mongo con su ip privada , tambien en el configmap poner los endpoint de la rds 
+
 ```yaml
   MONGO_HOST: "10.0.10.50"
   MONGO_PORT: "27017"
